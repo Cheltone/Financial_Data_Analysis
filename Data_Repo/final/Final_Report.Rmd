@@ -1,0 +1,1027 @@
+---
+title: "DSE Final Project: Oakland R's" 
+author: "Connor Reed, Alice Townsend, Chad Melton, Rebecca Brink"
+date: "December 08, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# INTRODUCTIONS FROM INDIVIDUAL PROJECTS AKA STUFF TO INCORPORATE
+
+
+# MODELS FROM INDIVIDUAL PROJECTS AKA MORE STUFF TO INCORPORATE
+
+# CREED
+##EDA: Risk Exposure
+
+Let's pick a piece of this database to study with a geographic lens. We have data on loans the bank has given, and classifications for these loans: A = loan period has ended, paid in full; B = loan period has ended, outstanding debt; C = currently making timely payments; D = currently behind on payments. Clearly, classes B and D pose some risk to the bank's top line. It can be costly to track down clients and impose legal actions to make them pay, and bank's want to minimize the risk of taking on clients who will default on their loans. Let's see if we can create some features to capture risk exposure in each district. We will begin by joining the account table to the loan table so we can append a district id to each loan.
+
+While it's true that the majority of our tables contain only aspatial data, we have a name field in the district table we can use to start looking at our data geographically. Seasoned geographers and historians will recall that the Czech Republic has been divided into 76 districts (or "Okresy") since before the country even existed. These geographic delineations remained intact even after Czechoslovakia disbanded. We can use this district name field to join in some spatial data. However, before we get to mapping, let's clean this table and make sure the fields are appropriately named. More appropriate field names can be drawn from the metadata at this link: https://sorry.vse.cz/~berka/challenge/pkdd1999/berka.htm
+
+```{r}
+account <- account %>% mutate(account_id = as.character(account_id)) %>% select(account_id,district_id)
+
+loan <- loan %>% mutate(account_id = as.character(account_id)) 
+
+loan <- inner_join(loan,account)
+```
+
+Now we will summarize the total number of loans, and the number of loans carrying risk by district id. We can create a simple ratio of these terms to arrive at a risk exposure score.
+
+```{r}
+loans <- loan %>% group_by(district_id = as.character(district_id)) %>% summarise(total_loans = n_distinct(loan_id))
+
+risky_loans <- loan %>% filter(xor(status=="B",status=="C")) %>% group_by(district_id = as.character(district_id)) %>% summarise(risky_loans = n_distinct(loan_id))
+
+loans <- inner_join(loans,risky_loans,by="district_id")
+
+loans <- loans %>% mutate(risk_exp = risky_loans/total_loans)
+```
+
+Now let's join the loan data back on to our district table.
+
+```{r}
+district <- district %>% mutate(district_id = as.character(district_id))
+
+district <- inner_join(district,loans)
+```
+
+Awesome! Now we have a table with demographic information for each district, market penetration, and existing risk exposure from the bank's lending practice. We're almost ready to get into some cartography. But first, let's build out a quick bar plot for risk exposure like we did for market penetration.
+
+```{r}
+
+top_district <- district %>% mutate(safe_loans = total_loans - risky_loans) %>% arrange(desc(risky_loans)) %>% slice(1:20)
+
+mdat = melt(top_district, id.vars=c("dist_name"), measure.vars=c("safe_loans", "risky_loans"))
+
+ggplot(mdat, aes(x=reorder(dist_name,-value), y=value, fill=variable)) + theme_bw() + geom_bar(position="stack", stat="identity") + scale_fill_manual(values=c("grey80", "grey50")) + guides(x =  guide_axis(angle = 90)) + labs(x="Top 10 Districts with Greatest Loan Risk Exposure",y="")
+```
+
+It looks like it's pretty common for this bank to have a substantial proportion of their borrowers either failing to pay back loans or behind on their payments. The bank may want to consider adopting some stricter requirements for borrowing, such as better credit or a higher income.
+
+
+##EDSA: Choropleth Mapping
+
+Time to make some maps! Finding geographic data for districts in the Czech Republic is very simple. A quick Google search will get you there, but I'll paste some links to data sources here, too. We can read in vectorized spatial data using the sf package. Note that you can also load in the RCzechia package via R, but this package is quite massive, with many dense spatial objects that we don't need for this study. Depending on your available memory/processing power, it's more efficient to just load in a single shapefile.
+
+https://github.com/jlacko/RCzechia or https://geoportal.cuzk.cz/
+
+```{r}
+
+
+districts_geo <- st_read("C:/Users/conre/Desktop/DSE 511/Project/Data/districts_czech.shp")
+```
+
+Now let's join our existing district table onto the shapefile using the dist_name field. Depending on the vintage of your R software under the hood, you may see a package warning on this code chunk. You can disregard this.
+
+```{r}
+districts_geo <- inner_join(districts_geo,district,by="dist_name")
+```
+
+We can now combine some GIS packages to create some choropleth maps. Let's start with market penetration.
+
+```{r}
+
+
+choro_pen <- ggplot(districts_geo) +
+  geom_sf(aes(fill=penetration),color = gray(.6),alpha=.7) + labs(fill = "Market Penetration by District") + theme(axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        panel.grid.major = element_line(color = "white"))
+
+choro_pen + scale_fill_gradient(low='yellow',high='brown',labels=percent)
+```
+
+Nice! Looks like this bank penetrates a little stronger in the western half of the country which is actually more rural than other parts of the Czech Republic. If we overlaid a map of branch locations we might discover why this penetration pattern is present.
+
+What about risk exposure? Where are the risky loans concentrated?
+
+```{r}
+choro_risk <- ggplot(districts_geo) +
+  geom_sf(aes(fill=risk_exp),color = gray(.6),alpha=.7) + labs(fill = "Risk Exposure by District") + theme(axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        panel.grid.major = element_line(color = "white"))
+
+choro_risk + scale_fill_gradient(low='white',high='red',labels=percent)
+```
+
+It looks like we have some districts that are in trouble. Every loan we write is either late on payments or has past term and has not been repaid. We should check out how our branches are evaluating loan applicants and make sure we are only doing business with customers who we are confident will pay their dues on time.
+
+
+
+#CMELTON
+```{r}
+#Exploring statistical summaries of fields of interest
+summary(loanData["amount"])
+summary(loanData["payments"])
+summary(loanData["duration"])
+summary(orderData)
+summary(accData)
+summary(clientData)
+summary(dispData)
+summary(loanData)
+summary(transData)
+```
+
+```{r}
+#Joining databases (loan-account, account-district,district - client)
+df1 = loanData
+
+New = right_join(df1, accData, by = 'account_id')
+New1 = right_join(df1, dispData, by = 'account_id')
+Final = right_join(New1, clientData, by = 'client_id')
+Comp = left_join(Final, districtData, by = 'district_id')
+```
+
+```{r}
+#Checking results of joins and more exploration
+summary(Final)
+```
+
+```{r}
+head(Final)
+```
+
+```{r}
+#plot(Final$payments,Final$amount, main="Scatterplot Example",xlab="1 ", ylab="2 ")
+ggplot(Final, aes(x=payments, y=amount)) + geom_point() + labs(x = "Payment", y = "Loan amount", title = "Payments vs Loan amount")
+boxplot(Final$payments)
+hist(Final$payments)
+hist(Final$amount)
+hist(Final$district_id)
+table(Final$gender)
+```
+
+```{r}
+ratF2M = 2645/(2724+2645)
+ratF2M
+```
+49% Female to 51% Male
+```{r}
+#Looking at district to crime.
+plot(Final$district_id, Comp$A16)
+```
+
+```{r}
+#Looking at district to average salary. 
+plot(Final$district_id, Comp$A11)
+```
+
+```{r}
+#transforming gender to binary but didn't end up needing to use.
+Final$genderBin[Final$gender == "M"] = 1
+Final$genderBin[Final$gender == "F"] = 0
+```
+
+#Exploring loan status
+
+A stands for contract finished, no problems, B stands for contract finished, loan not payed, C stands for running contract, OK so far, D stands for running contract, client in debt’
+
+```{r}
+table(Final$status)
+test = table(Final$status)
+prop.table(test)
+#Transforming to dataframe
+#Cleaning and formating
+
+df <-data.frame(Final)
+
+dfComp <-data.frame(Comp)
+
+#Ommiting rows with NA.Lots and lots on NA
+NoNATest <-na.omit(dfComp)
+
+
+#Regional population distribution
+table(NoNATest$A3)
+
+test = table(NoNATest$A3)
+prop.table(test)
+
+#Gender vs loan status
+ggplot(data = NoNATest)+geom_bar(aes(x = gender, fill=as.factor(status)))+
+        ggtitle(label ="Gender vs loan status")
+
+#District ID vs loan status 
+
+ggplot(data = NoNATest)+geom_bar(aes(x = status, fill=as.factor(A3)))+
+        ggtitle(label = "                District vs loan status")
+
+#District ID vs loan status but x and y exchanged
+
+ggplot(data = NoNATest)+geom_bar(aes(x = as.factor(A3), fill=status))+ labs(x = "Region", y = "Loan status", title = "Region vs Loan status") + theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+#Loan amount vs region
+ggplot(NoNATest, aes(x=amount, y=A3)) + geom_point() + labs(x = "Loan amount", y = "Region", title = "Loan amount vs region") 
+
+#Avg salary vs loan status
+ggplot(NoNATest, aes(x=as.factor(NoNATest$status), y=A11)) + geom_point() + labs(x = "Status", y = "Average Salary", title = "Status vs Salary")
+
+#Loan amount vs Salary
+ggplot(NoNATest, aes(x=A11, y=amount)) + geom_point() + labs(x = "Average salary", y = "Loan amount", title = "Loan amount vs Salary")
+
+#Salary vs region
+ggplot(NoNATest, aes(x=A11, y=A3)) + geom_point() + labs(x = "Average salary", y = "Region", title = "Salary vs region")
+
+#Loan amount vs duration
+ggplot(NoNATest, aes(x=amount, y=duration)) + geom_point() + labs(x = "Duration", y = "Loan Amount", title = "Duration vs Loan amount")
+
+plot(as.factor(NoNATest$birth_date), NoNATest$amount, col="blue", xlab = "Birthdate", ylab = "Amount", main = "Birthdate vs Loan Amount")
+
+
+#Loan amount vs Average salary
+
+plot(as.factor(NoNATest$birth_date), NoNATest$A11, col="blue", xlab = "Birthdate", ylab = "Amount", main = "Birthdate vs Average Salary")
+
+
+# K-Means Clustering for age vs amount
+
+#COnversion from birthdate to age
+NoNATest$Current_age = round(as.numeric(difftime(Sys.Date(),NoNATest$birth_date, units = "weeks"))/52.25, 0)
+
+
+dataset = NoNATest[,c(4,29)]
+
+
+
+# Elbow Method test
+set.seed(6)
+wcss = vector()
+for (i in 1:10) wcss[i] = sum(kmeans(dataset, i)$withinss)
+plot(1:10,
+     wcss,
+     type = 'b',
+     main = paste('The Elbow Method'),
+     xlab = 'Number of clusters',
+     ylab = 'WCSS')
+
+'Results of the elbow test suggest are data will fit bet around 4 nodes'
+
+# Fitting K-Means to the dataset
+set.seed(29)
+kmeans = kmeans(x = dataset, centers = 4)
+y_kmeans = kmeans$cluster
+library(calibrate)
+
+# Plot clusters
+library(cluster)
+exes = dataset$Current_age
+clusplot(dataset,
+         y_kmeans,
+         lines = 0,
+         shade = TRUE,
+         color = TRUE,
+         labels = 4,
+         plotchar = FALSE,
+         span = TRUE,
+         main = paste('KMeans for amount and age'),
+         xlab = 'Amount',
+         ylab = 'Current Age')
+plot(dataset$amount~dataset$Current_age)
+with(dataset, text(dataset$amount~dataset$Current_age, labels=Current_age, pos=4,cex=0.5))
+
+'The results of our KMeans analysis suggest that data are clustered more around loan amount than age.'
+
+
+library(rgl)
+
+kdf<- kmeans(dataset,4)# Create kmeans clustering
+newdf <- data.frame(dataset, K=kdf$cluster)#Include the number of cluster in the data set
+pcdf <- princomp(dataset,cor=T,score=T)
+summary(pcdf)#Compute the validity of each component/dimension
+plot3d(pcdf$scores, col=newdf$K)#Create a 3D plot
+
+
+#KMeans for age and region
+dataset = NoNATest[,c(29,13)]
+
+# Elbow Method test
+set.seed(6)
+wcss = vector()
+for (i in 1:10) wcss[i] = sum(kmeans(dataset, i)$withinss)
+plot(1:10,
+     wcss,
+     type = 'b',
+     main = paste('The Elbow Method'),
+     xlab = 'Number of clusters',
+     ylab = 'WCSS')
+set
+set.seed(29)
+kmeans = kmeans(x = dataset, centers = 5)
+y_kmeans = kmeans$cluster
+library(calibrate)
+# Visualising the clusters
+library(cluster)
+
+clusplot(dataset, y_kmeans,
+         lines = 0,
+         shade = TRUE,
+         color = TRUE,
+         labels = 4,
+         plotchar = FALSE,
+         span = TRUE,
+         main = paste('KMeans for amount and age'),
+         xlab = 'Region',
+         ylab = 'Current Age')
+plot(dataset$district_id~dataset$Current_age, main= "Age Labeled")
+with(dataset, text(dataset$district_id~dataset$Current_age, labels=Current_age, pos=4,cex=0.5))
+
+plot(dataset$district_id~dataset$Current_age, main= "District ID Labeled")
+with(dataset, text(dataset$district_id~dataset$Current_age, labels=dataset$district_id, pos=4,cex=0.5))
+
+
+'Again, though some clusters are visible, there does not appear to be any great correlation. Age doen not appear to be related to
+any cluster of deliquent acconuts.'
+
+'''
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ATOWNSEND
+
+We can understand the relationship of each of the features within the dataset we have constructed and the status of the loan by building a logistic regression model. A single coefficient associated with a single feature for the logistic regression model will detail the relationship of that feature with the outcome feature whilst controlling the effect of all the other features. We will extract the p-values which test whether or not the coefficient is significant for each one of the features. If the p-value is significant (comparing p-value to 𝛼=0.05), then the feature has a significant relationship with the outcome feature, the status of the loan. We can then further examine each of the significant coefficients within the model to see what effect each one has on the standing of the loan.
+
+Important note: we change the loan status feature to 0 for a "Good Loan" and 1 for a "Bad Loan" to create the model.
+```{r}
+# Selecting variables from merged dataset for logistic regression model
+Loans_LR <- Loans_ %>% select(
+    loan_stat,
+    Time_diff_loan,
+    amount,
+    duration,
+    payments,
+    frequency,
+    gender,
+    CC,
+    A3,
+    A4,
+    A5,
+    A6,
+    A7,
+    A8,
+    A9,
+    A10,
+    A11,
+    A14,
+    Age,
+    min_balance,
+    mean_balance,
+    max_balance,
+    min_amount,
+    mean_amount,
+    max_amount,
+    sum_interest_neg_balance,
+    credit_card_withdrawals
+)
+
+# Making sure the features are the correct format
+Loans_LR$loan_stat <- as.factor(ifelse(Loans_LR$loan_stat == "Bad Loan",1,0))
+Loans_LR$frequency <- as.factor(Loans_LR$frequency)
+Loans_LR$gender <- as.factor(Loans_LR$gender)
+Loans_LR$A3 <- as.factor(Loans_LR$A3)
+Loans_LR$amount <- as.numeric(Loans_LR$amount)
+Loans_LR$duration <- as.numeric(Loans_LR$duration)
+Loans_LR$payments <- as.numeric(Loans_LR$payments)
+Loans_LR$sum_interest_neg_balance <- as.numeric(Loans_LR$sum_interest_neg_balance)
+Loans_LR$credit_card_withdrawals <- as.numeric(Loans_LR$credit_card_withdrawals)
+Loans_LR$CC <- as.factor(Loans_LR$CC)
+
+# Building logistic regression model and extracting the p-values and coefficients
+model <- glm(loan_stat ~ .,data = Loans_LR,family = "binomial")
+Coefficients <- exp(coef(model))
+P_values <- data.frame(cbind(rownames(coef(summary(model))),coef(summary(model))[,4]))
+rownames(P_values) <- NULL
+names(P_values) <- c("Feature","P-value")
+P_values$`P-value` <- as.numeric(as.character(P_values$`P-value`))
+P_values <- P_values[P_values$Feature != "(Intercept)",]
+P_values$Significant <- ifelse(P_values$`P-value` < 0.05,"Significant","Not significant")
+
+# Plotting the p-values for each of the features from the logistic regression model
+plot <- ggplot(data = P_values,aes(x = Feature,y = `P-value`,label = Feature,color = Significant)) + 
+    geom_point(stat='identity', fill="black",size = 3)  +
+    geom_segment(aes(y = 0,x = Feature,yend = `P-value`,xend = Feature)) +
+    ylim(0,1) +
+    xlab("") +
+    ylab("P-value") +
+    geom_vline(xintercept = 0.05) +
+    coord_flip() +
+    scale_color_manual(name = "", 
+                     labels = c("Significant","Not significant"), 
+                     values = c("Significant" = "green3","Not significant" = "grey"))
+ggplotly(plot,height= 800)
+```
+
+We can see the associated p-values for each coefficient for each feature in the plot above. Hovering over a single point in the lollipop chart will display the p-value for that feature. For instance, the p-value for A14 was p = 0.23, which based on our threshold value for  𝛼 , is considered not statistically significant. Therefore, the number of entrepreneurs living in the same district as the client does not have an effect on whether or not the individual will have a bad vs. good loan standing. The colors of the lollipops (green vs. grey) details whether or not the p-value for the coefficient of a particular feature was statistically significant or not. We can see from the plot that min_balance, the minimum balance seen in the clients account 90 days prior to the loan start date is significant. Also the max_balance and max_amount which are the maximum balance and maximum amount in the clients account 90 days prior to the loan start date are also significant. The Time_diff_loan feature is also significant as well which details the amount of time between the account being opened and the loan begin granted. Finally, the sum_interest_neg_balance feature is significant which is detailing the sum of transaction amounts that are interest charged on a negative balance. Now let's inspect these statistically significant features a little further. Firstly, we will examine the Time_diff_loan feature.
+```{r}
+plot_ly(color = ~Loans_LR$loan_stat,x = ~Loans_LR$Time_diff_loan,type = "box",orientation = "h",showlegend = TRUE) %>% layout(height = 400,xaxis = list(title = "Difference b/w Loan Date & Account Date (days)"),yaxis = list(title = "",showticklabels = FALSE))
+```
+
+Above we can see a clear difference in time between the loan initiation date and the account opened date between the loans with good vs. bad standing. The median time difference for the good loans was roughly 400 days. The median time difference for the bad loans was roughly 374 days. We can examine the coefficient in the model to understand how the difference in time affects the odds that an individual will have a bad standing on their loan.
+
+```{r}
+paste0("Change in odds for a 365 day increase in the difference between the loan initiation date and account opened date whilst accounting for all other features: ",as.character(round(as.numeric(Coefficients[which(names(Coefficients) == "Time_diff_loan")]^365),2)))
+```
+'Change in odds for a 365 day increase in the difference between the loan initiation date and account opened date whilst accounting for all other features: 0.37'
+This means that with a one year increase in the amount of time between the loan start date and the account opened date, the odds of having a bad loan standing will be multiplied by a factor of 0.37. This means the odds of having a bad loan standing will decrease as the amount of time between granting a loan and opening an account increases. Maybe this means the banks should wait a certain amount of time before they even considering granting a loan for a client. Now we will examine the sum_interest_neg_balance feature closer.
+
+```{r}
+plot_ly(color = ~Loans_LR$loan_stat,x = ~Loans_LR$sum_interest_neg_balance,type = "box",orientation = "h",showlegend = TRUE) %>% layout(height = 400,xaxis = list(title = "Accumulated Interest on Negative Balance (90 days prior)"),yaxis = list(title = "",showticklabels = FALSE))
+```
+
+We can see that both distributions are highly right skewed. The majority of the accounts have a sum of zero for the interest accumulated for a negative balance. Amongst the bad loans, there is one account in particular which has a very large sum as compared to the other accounts (315). We may want to consider removing this account as it is definitely an outlier observation. We can examine the coefficient in the model to understand how the sum of interest accumulated from a negative balance in the account 90 days prior to the loan grant date affects the odds that an individual will have bad standing on their loan.
+
+```{r}
+paste0("Change in odds of bad loan standing for a one unit increase in the sum of interest accumulated from a negative balance whilst accounting for all other features: ",as.character(round(as.numeric(Coefficients[which(names(Coefficients) == "sum_interest_neg_balance")]),2)))
+```
+'Change in odds of bad loan standing for a one unit increase in the sum of interest accumulated from a negative balance whilst accounting for all other features: 1.14'
+This means that for every one unit increase in the sum of interest accumulated from a negative balance 90 days prior to the loan start date, the odds of a bad loan standing will be multiplied by a factor of 1.14. Meaning that the odds of having a bad loan standing will increase as this interest increases, which makes a lot of sense. But again, we noticed outliers in our dataset and may want to account for this in the model. Now let's examine the min_balance feature.
+
+```{r}
+plot_ly(color = ~Loans_LR$loan_stat,x = ~Loans_LR$min_balance,type = "box",orientation = "h",showlegend = TRUE) %>% layout(height = 400,xaxis = list(title = "Minimum Balance (90 days prior)"),yaxis = list(title = "",showticklabels = FALSE))
+```
+
+It is clear that the median minimum balance in the clients account 90 days prior to the loan date is much higher (roughly 23.6k) for good standing loans versus bad standing loans (roughly 8.6k).
+
+```{r}
+paste0("Change in odds of bad loan standing for a 10k unit increase in the minimum balance whilst accounting for all other features: ",as.character(round(as.numeric(Coefficients[which(names(Coefficients) == "min_balance")])^10000,2)))
+```
+'Change in odds of bad loan standing for a 10k unit increase in the minimum balance whilst accounting for all other features: 0.31'
+This means that for a 10k unit increase in the minimum balance 90 days prior to the loan start date, the odds of a bad loan standing will be multiplied by a factor of 0.31. Meaning that the odds of having a bad loan standing will decrease as the minimum balance (90 days prior) increases.
+
+```{r}
+plot_ly(color = ~Loans_LR$loan_stat,x = ~Loans_LR$max_amount,type = "box",orientation = "h",showlegend = TRUE) %>% layout(height = 400,xaxis = list(title = "Maximum Amount (90 days prior)"),yaxis = list(title = "",showticklabels = FALSE))
+```
+
+It is clear that the median maximum transaction amount in the clients account 90 days prior to the loan date is much higher (roughly 31.4k) for good standing loans versus bad standing loans (roughly 24.8k).
+
+```{r}
+paste0("Change in odds of bad loan standing for a 10k unit increase in the maximum transaction amount whilst accounting for all other features: ",as.character(round(as.numeric(Coefficients[which(names(Coefficients) == "max_amount")])^10000,2)))
+```
+'Change in odds of bad loan standing for a 10k unit increase in the maximum transaction amount whilst accounting for all other features: 0.64'
+This means that for a 10k unit increase in the maximum transaction amount 90 days prior to the loan start date, the odds of a bad loan standing will be multiplied by a factor of 0.64. Meaning that the odds of having a bad loan standing will decrease as the maximum transaction amount (90 days prior) increases.
+
+We have been able to identify the important relationships between certain features within the dataset and the status of a loan (good vs. bad). Below are some possible next steps that include running diagnostic tests on the logistic regression model above and how we may alleviate any assumptions that are violated.
+
+
+
+```{r}
+glm.fit <- glm(loan_stat ~ ., data = Train, family = binomial)
+predicted <- predict(glm.fit,Test, type="response")
+glm.pred <- ifelse(predicted > 0.5,1,0)
+mean(glm.pred == Test$loan_stat)
+```
+
+
+
+
+# CONCLUSIONS FROM INDIVIDUAL PROJECTS AKA EVEN MORE STUFF TO INCORPORATE
+
+
+# CREED 
+
+This type of ESDA opens up new opportunities for research and new avenues to explore. We could start regressing some of the demographic variables we already have in the district table on risk exposure and market penetration to see what place-specific factors really drive these metrics. We might hypothesize that areas with higher risk exposure generally have lower average salaries and perhaps higher crime. We could speculate that areas with improved market penetration are areas with higher average salary. We could even perform a geostatistical analysis to identify statistically significant patterns of spatial clustering among variables of interest. Another interesting application would be to head back to square one and start examining transaction data by these district geographies.
+
+#CMELTON
+
+Data Exploration Overview
+This document presents results of an exploratory data analysis of the PkDD 99’ Financial data set which contains data regarding personal finance and other relavent details of ~ 4500 citizens in Eastern Europe. After tables were extracted from an SQL database, tables were then combined to form one large table that contained all variables of interest. At this point, some basic statistical operations were performed to gain insight into these data. Some interesting finding in my data exploration focused around loan status. Loan status was recorded to be under four different states named A, B, C, and D. A represented a finished contract with no problems, B represented a finished contract but the loan not payed, C represented a finished contract but OK so far, and D represented a finished contract, client in debt.Though only consisting of approximately three percent across all regions, the majority of regions contained some level of loan default (B). However, two regions, East and North Bohemia had very few loan defaults even though 1) salaries were modest compared to loan amounts, and 2) there was no significant difference in population distribution. Moreover, large sections of data were NA. It would be statistically interesting to further investigate what is different between the East and North Bohemia from the rest of the region in question, perhaps with some type of logistic regression model or other machine learning models.
+
+
+
+# ABSTRACT 
+
+# Introduction
+
+[INSERT] Here we need a brief introduction of question(s) we are trying to answer
+
+Our team was given the PKDD 1999 Discovery Challenge data set. This data set contains information from a bank operating in the Czech Republic. The dataset includes tables containing information on loans and demographics of the consumers. The goal of this report is to answer the question, how can use the different features to predict whether an individual in this population will successfully complete a loan? A variety of techniques are employed including data exploration techniques, data visualizations, logistic regression models, basic ESDA procedures, and machine learning algorithms. The remainer of this report demonstrates a successfull data exploration and analysis. Before we begin loading the data, we should install some packages for analysis. As a note to the reader, the packages used are meaty packages and it will take a few minutes for the installation to complete. 
+
+```{r}
+# read in all libraries used by group mates for analysis
+suppressMessages(library(caret))
+suppressMessages(library(cluster))
+supressMessages(library(data.table))
+suppressMessages(library(DBI))
+suppressMessages(library(dplyr))
+suppressMessages(library(e1071))
+suppressMessages(library(ggplot2))
+suppressMessages(library(ggspatial))
+supressMessages(library(gmodels))
+supressMessages(library(here))
+suppressMessages(library(leaflet))
+suppressMessages(library(plotly))
+suppressMessages(library(psych))
+suppressMessages(library(RSQLite))
+suppressMessages(library(reshape2))
+suppressMessages(library(scales))
+suppressMessages(library(sf))
+suppressMessages(library(sp))
+suppressMessages(library(tidyr))
+supressMessages(library(tidyverse))
+suppressMessages(library(vcd))
+suppressMessages(library(vcdExtra))
+
+options(warn = -1)
+options(messages = -1)
+```
+
+## Data
+
+The following section outlines the necessary data exploration and manipulation used on this dataset. We start with the database as a whole and create a connection to the SQL database. After loading this connection, we also observe the table names. 
+
+```{r}
+# Connecting to database
+#This filepath should work on anyone's system as long as both folders are downloaded from Git.
+conn <- dbConnect(RSQLite::SQLite(),'..\data\financial.db')
+
+# Observe the table names 
+dbGetQuery(conn,"SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;")
+```
+
+We can see we have information related to accounts, cards, clients, disposition (whether a client is the executor of an account or just a user), district (geographic and demographic data), loans, orders, and transactions. We continue with the analysis working table by table. We can visualize this database with the below image.
+
+### NEED CHAD'S DATABASE PICTURE IT IS VERY PRETTY 
+
+We can see that we have eight different tables in the financial.db database. We start by getting the data in a format we can work with. Because this is a realtively small database, we will first convert each of our database tables into disparate data frames with the dbReadTable command.This will allow for direct access to the data, but is not advantageous with larger datasets. 
+
+```{r}
+# Reading in tables
+Account <- dbReadTable(conn,"account")
+Card <- dbReadTable(conn,"card")
+Client <- dbReadTable(conn,"client")
+Disp <- dbReadTable(conn,"disp") #Disp = dispersion
+District <- dbReadTable(conn,"district")
+Loan <- dbReadTable(conn,"loan")
+Order <- dbReadTable(conn,"order")
+Transactions <- dbReadTable(conn,"trans")
+
+```
+
+Now that we have generated these tables, by will work table by table in the next sections. 
+
+### Database Tables
+
+
+[INSERT] Descrivbe why table exploration is important
+
+As we dive into the tables, we first explore the Account dataset by viewing the first six rows.
+
+```{r}
+head(Account)
+```
+
+The account table describes static characteristics of the account. The account_id is the identification number for the account. There are 4500 unique accounts within the table. Each record accounts for a single account, which means we have no duplicated records. The district_id feature is the location of the branch of the bank. We do not have a description for these districts just yet. There are 77 unique district IDs (numbered 1 - 77) for which the accounts come from. The date feature is the date of the creation of the account which has the following format: YYYY-MM-DD. The dates of the creation of the accounts ranges from 1993-01-01 to 1997-12-29. The frequency feature details the frequency of issuance of the bank statements. The statements can either be issued monthly ("POPLATEK MESICNE"), weekly ("POPLATEK TYDNE"), or after each transaction ("POPLATEK PO OBRATU"). We now transition to the Card table and repeate the process.
+
+```{r}
+head(Card)
+```
+
+The card table card_id column is the identification number for the credit card. There are a total of 892 unique credit card identification numbers. There are no duplicate records within the table. The disp_id is another identification column which will allow us to join various tables together which we will see soon. There are 892 unique disposition identification numbers. The type feature explains the type of credit card issued. The type of credit card can either be a junior, classic, or gold credit card. The issued feature is the issuance date of the credit card which has the following format: YYYY-MM-DD. The dates for the credit cards being issued range from 1993-11-07 to 1998-12-29. Now we explore the client table by viewing the first six rows.
+
+```{r}
+head(Client)
+```
+
+We can see that the Client table contains as identification number for each client which is called the client_id. We have 5369 unique clients within the table. There are no duplicate clients in the table. Then we also have the sex of the client which is called the gender. We finally have the birth date of the client, birth_date, and the location for the branch of the bank, the district_id. As a quick aside, we are interested to see the gender dispersion in our data. We look at this by running the following command. 
+
+```{r}
+Gender <- Client %>% group_by(gender) %>% summarize(Count = n(),Frequency = round((Count/nrow(Client))*100,2))
+Gender
+```
+
+It is clear from the table above that there is a pretty even distribution in the table of the sex of the clients. Later when we join tables together we will further explore characteristics of the clients such as their ages. With this aside complete, we move on to the Disp table.  
+
+```{r}
+head(Disp)
+```
+
+The Disp table has an identification number called disp_id which details the record identifier. In this table we have 5369 unique record identifiers. We also have the client_id which is an identification number for each unique client. We have a total of 5369 unique client identification numbers within this table. We also have the account_id which is the identification number for the account. We have a total of 4500 unique account identification numbers in this table which means that we have have more than one client associated with a single account. Finally, we have the type feature which tells us whether or not the client within the table is the owner or the user of the account. The unique values of the type feature are "OWNER" and "DISPONENT". This table will allow us to join multiple tables together. Now we look at the District table a little more closely by first displaying some rows of the dataset.
+
+```{r}
+head(District)
+```
+
+The table above displays various demographic data. The identification number for the different districts is called the district_id which we have already seen in the Account dataset. We also have the name of the district which is called A2. The region which the district resides in is denoted A3. We have eight different regions which the districts fall into: Prague, Central Bohemia, South Bohemia, West Bohemia, North Bohemia, East Bohemia, South Moravia, and North Moravia. The number of inhabitants within the district is denoted with A4. A5 - A8 denotes the number of municipalities with inhabitants <499, 500-1999, 2000-9999, and >10000, respectively. The number of cities in each district is denoted with A9. The ratio of urban inhabitants in each district is denoted A10. The average salary within each district is denoted A11. The unemployment rate for '95 and '96 are denoted A12 and A13, respectively. The number of entrepreneures per 1000 inhabitants is denoted as A14. Finally, the number of commited crimes in '95 and '96 for the different districts is recorded in A15 and A16, respectively.
+
+```{r}
+Cities <- District %>% group_by(A3) %>% summarize(num_cities = sum(A9))
+names(Cities) <- c("Region","Number of Cities")
+Cities
+```
+
+In the table above we can see the number of cities within each region. It is important to note that Prague is the capital and largest city of the Czech Republic. In this table there is only a single district within Prague called "Hl.m. Praha".
+
+
+Now let's look into the Loan dataset.
+
+```{r}
+head(Loan)
+```
+
+The table above displays the loans granted for a given account within each row. We only have a single loan for each account present in the table for a total of 682 unique loans. The identification number for the loan is called the loan_id. The account number is the account_id which we have seen in the Account table. There is a date for when the loan was granted with the format: YYY-MM-DD. The dates for the loans range from 1993-07-05 to 1998-12-08. The amount of money that was granted is also given in the amount feature. The maximum amount for a loan was roughly 590k and the minimum amount for a loan was roughly 5k. The duration of the loan is also given (which can either be 12, 24, 36, 48, or 60 months), the monthly payments, and the status of the loan. The status of the loan can either be A (contract finished with no problems), B (contract finished with loan not paid), C (running contract with good standing), or D (running contract with client in debt).
+
+Let's look at the Transactions table.
+
+```{r}
+head(Transactions)
+
+```
+
+The table above details the different transactions on each account. We have a total of 1056320 unique transactions. The trans_id is a unique identification number for each transaction. The account_id details the account number from which the transaction was made. It is important to note that in this table we have multiple transactions for a single account number. The date feature details the date of the transaction which has the format: YYYY-MM-DD. The type feature details whether the transaction stands for credit ("PRIJEM") or withdrawal ("VYDAJ"). The operation feature details the mode of the transaction which can be a credit card withdrawal ("VYBER KARTOU"), a credit in cash ("VKLAD"), a collection from another bank ("PREVOD Z UCTU"), a withdrawal in cash ("VYBER"), or a remittance to another bank ("PREVOD NA UCET"). We have the amount and balance features which detail the amount of the transaction and the balance remaining after the transaction. The k_symbol feature details the characterization of the transaction where we can have either an insurance payment ("POJISTNE"), a payment for statement ("SLUZBY"), interest credited ("UROK"), sanction interest if negative balance ("SANKC. UROK"), a household transaction ("SIPO"), old-age pension ("DUCHOD"), or a loan payment ("UVER"). It is important to note that the k_symbol may be missing for some of the transactions in the dataset. The bank feature is a unique two letter code which details the bank of the partner. Finally, the account feature details the account of the partner.
+
+```{r}
+# Summary statistics for the amount of transaction and balance in the account after the transactions
+A <- summary(Transactions$amount)
+B <- summary(Transactions$balance)
+Summary <- data.frame(
+    rbind(
+        c("Amount",do.call("c",lapply(1:length(A),function(x){round(as.numeric(A[x]),2)}))),
+        c("Balance",do.call("c",lapply(1:length(B),function(x){round(as.numeric(B[x]),2)})))
+    )
+)
+names(Summary) <- c("Feature","Minimum","Q2","Median","Mean","Q3","Maximum")
+Summary
+```
+
+We can see a summary table of the amount and balance features in the table. Something interesting to note is that there are transactions in which the amount is equal to zero. These transactions only account for 0.015% of the table.
+
+```{r}
+Transactions %>% group_by(operation) %>% summarise(Frequency = paste0((round(n()/nrow(Transactions),3))*100))
+```
+
+Above we can see the distribution of mode of the transactions. Withdrawals in cash make up the largest percentage of the transactions (roughly 41.2%). Credit card withdrawals make up the smallest percentage of the transactions (roughly 0.8%).
+
+```{r}
+Transactions %>% group_by(k_symbol) %>% summarise(Frequency = paste0((round(n()/nrow(Transactions),3))*100))
+```
+
+Above we can see the breakdown of the different descriptions of the transactions made on the account. Surprisingly transactions with this information missing (no description for the transaction) make up the largest percentage of the transactions (roughly 45.6%). We might want to discuss this with the bank. Transactions that are characterized by a negative balance in the clients account make up the smallest percentage of all transactions (roughly 0.1%). Interestingly there are roughly 5.1% of transactions which have no description for the characterization of the transaction (an empty string). This makes me wonder if the information is an error. We would have to discuss this further with the bank.
+
+Finally let's take a look at the Order table.
+
+```{r}
+head(Order)
+```
+
+The table above displays the various orders. The order_id is the order identification number. The account_id is the account for which the order is issued for. The bank_to is the bank of the recipient. The account_to is the account of the recipient. The amount is the amount that was transferred. The k_symbol is the characterization of the order. We can either have an insurance payment ("POJISTNE"), household payment ("SIPO"), leasing payment ("LEASING"), or a loan payment ("UVER"). We have a total of 6471 orders within the table. An account can have more than one order. It is interesting to me that the date was not stored in the table for the order. This may be something that I would ask the bank about and whether or not this information is available. I will not provide a further summary of the Order table as I do not utilize it when I join the various tables together to focus on a particular question. Now that we have taken a closer look at the various tables within the database, below is an image detailing the different relationships between the tables and how we may possibly join them together.
+
+
+
+### Visualization of Data
+
+[INSERT] In same order as above, visualize data from tables
+
+Following the order established in the previous section, we start with a visualization of important features in the account table. The code and plot are shown below. 
+
+```{r}
+# Issuance of accounts over MM/YY
+Account$Month <- do.call("c",lapply(as.character(Account$date),function(x){substr(x,6,7)}))
+Account$Year <- do.call("c",lapply(as.character(Account$date),function(x){substr(x,3,4)}))
+Account_ <- Account %>% 
+    group_by(Year,Month) %>%
+    summarise(n = n())
+Account_$M_Y <- paste0(Account_$Month,"/",Account_$Year)
+Account_$M_Y <- factor(Account_$M_Y,levels = unique(Account_$M_Y))
+Account_$n = as.numeric(as.character(Account_$n))
+
+# District frequencies
+Districts <- Account %>% group_by(frequency) %>% summarize(Count = n())
+Districts <- Districts[order(Districts$Count),]
+
+# Create plot
+plot <- plot_ly()
+plot <- plot %>% add_trace(x = ~Account_$M_Y,y = ~Account_$n,type = 'scatter',mode = "lines") %>% layout(xaxis = list(domain = c(0,1),autotick = FALSE, dtick = 6,title = "Date of Issuance"),yaxis = list(title = "Accounts Issued"),showlegend = FALSE)
+plot <- plot %>% add_trace(labels = ~Districts$frequency, values = ~Districts$Count,hole = 0.6,type = 'pie',domain = list(x = c(0.85,1),y = c(0.6,0.95))) %>% layout(showlegend = FALSE)
+plot
+```
+
+The visualization produced shows the number of new accounts in the table for each month and year. We can see that the number of new accounts being issued was highest during 1993 and 1996. In the top right corner of the graph we can see the breakdown for the frequency feature across all records in the table. It seems people most often have there bank statements issued monthly (92.6%). A very small proportion of people have their bank statements sent weekly (5.33%) or after every transaction (2.07%). We now transition into the Card table.
+
+```{r}
+# Issuance of CC's over date ranges
+Card$Month <- do.call("c",lapply(as.character(Card$issued),function(x){substr(x,6,7)}))
+Card$Year <- do.call("c",lapply(as.character(Card$issued),function(x){substr(x,1,4)}))
+Card_ <- Card %>% 
+    group_by(Year,Month) %>%
+    summarise(n = n())
+Card_$M_Y <- paste0(Card_$Month,"/",substr(Card_$Year,3,4))
+Card_$M_Y <- factor(Card_$M_Y,levels = unique(Card_$M_Y))
+Card_$n = as.numeric(as.character(Card_$n))
+
+# Frequency of CC's being issued
+Card__ <- Card %>% 
+    group_by(type) %>%
+    summarize(count = n())
+
+# Create the plot
+plot <- plot_ly()
+plot <- plot %>% add_trace(x = ~Card_$M_Y,y = ~Card_$n,type = 'scatter',mode = "lines") %>% layout(xaxis = list(domain = c(0,1),autotick = FALSE, dtick = 6,title = "Date of Issuance"),yaxis = list(title = "CC's Issued"),showlegend = FALSE)
+plot <- plot %>% add_trace(labels = ~Card__$type, values = ~Card__$count,hole = 0.6,type = 'pie',domain = list(x = c(0.1,0.25),y = c(0.6,0.95))) %>% layout(showlegend = FALSE)
+plot
+```
+
+The above plot details the number of credit cards issued over time. We can see that the number of credit cards issued keeps increasing. In the top left corner is a donut chart that details the percentages of each type of credit card across the whole dataset. The majority of individuals who have a credit card have a classic credit card (73.9%). A smaller proportion of the individuals have either a junior (16.3%) or gold credit card (9.87%). 
+
+
+```{r}
+plot_ly(color = ~District$A3,x = ~District$A4,type = "box",orientation = "h",showlegend = FALSE) %>% layout(height = 400,xaxis = list(title = "Number of Inhabitants"))
+```
+
+The plot above displays the distributions of the number of inhabitants for the districts within each region. We can see (by hovering over the boxplots) that there is a lot of variation in the number of inhabitants in the districts of North Moravia with the minimum number of inhabitants being 42.82k and maximum 323.9k. We can see that Prague has the highest number of inhabitants at roughly 1.2 million. There are multiple regions that have outliers for the number of inhibitants within a certain district of the regions. For example, South Moravia has a district with roughly 387.57k inhabitants which is much higher than the other districts within that region.
+```{r}
+plot_ly(color = ~District$A3,x = ~District$A11,type = "box",orientation = "h",showlegend = FALSE) %>% layout(height = 400,xaxis = list(title = "Average Salary"))
+```
+
+Above is a plot detailing the distribution of the average salary for the districts within each region. Again, we can see that the region of Prague is an outlier compared to other regions of the country with the average salary in the entire region being roughly 12.5k. East Bohemia has the lowest median average salary at roughly 8.4k. We can also notice that Central Bohemia has a highly right skewed distribution of average salaries with the maximum average salary being roughly 11.3k. West Bohemia and South Moravia both having two districts that are outliers in terms of average salary. Now let's look at the distributions of the number of entrepreneurs per 1000 inhabitants for the districts within each region.
+
+```{r}
+plot_ly(color = ~District$A3,x = ~District$A14,type = "box",orientation = "h",showlegend = FALSE) %>% layout(height = 400,xaxis = list(title = "Number of Entrepreneurs (per 1k residents)"))
+```
+
+
+It is quite interesting to see that there is quite a large amount of variability for the number of entrepreneurs within each region.
+```{r}
+# Creat a dataset for the unemployment rate and crime rate within each region for '95 and '96
+District_ <- data.frame(cbind(
+    c(rep(District$A2,4)),
+    c(rep(District$A3,4)),
+    c(rep("'95",nrow(District)),rep("'96",nrow(District)),rep("'95",nrow(District)),rep("'96",nrow(District))),
+    c(rep("Unemployment Rate",2*nrow(District)),rep("Number of Crimes",2*nrow(District))),
+    c(District$A12,District$A13,District$A15,District$A16)
+))
+names(District_) <- c("District","Region","Year","Measure","Value")
+
+# Create the unemployment plot
+unem <- District_ %>% filter(Measure == "Unemployment Rate")
+unem$Value <- as.numeric(as.character(unem$Value))
+plot_ly(color = ~unem$Year,x = ~unem$Value,y = ~unem$Region,type = "box",orientation = "h",showlegend = TRUE) %>% layout(boxmode = "group",xaxis = list(title = "Unemployment Rate"),yaxis = list(title = ""))
+```
+
+
+The plot above details the distributions of unemployment rates amongst the different regions for the years 1995 and 1996. We can see that for all regions that the median unemployment rates increased from '95 to '95. It is clear from the plot that Prague has the lowest median unemployment rates amongst all the regions. North Bohemia has the greatest variance compared to all other regions. East Bohemia has a district that has much higher unemployment rates than the rest of the region.
+
+```{r}
+# Create the crime plot
+crime <- District_ %>% filter(Measure == "Number of Crimes")
+crime$Value <- as.numeric(as.character(crime$Value))
+plot_ly(color = ~crime$Year,x = ~crime$Value,y = ~crime$Region,type = "box",orientation = "h",showlegend = TRUE) %>% layout(boxmode = "group")
+```
+
+
+ I am going to lump together a loan with status A or C as a good loan, and a loan with status B or D as a bad loan and call the new feature loan_stat.
+```{r}
+# Create a new status feature for a good or bad loan
+Loan$loan_stat <- ifelse(Loan$status == "A"|Loan$status == "C","Good Loan","Bad Loan")
+
+# Issuance of loans over date ranges
+Loan$Month <- do.call("c",lapply(as.character(Loan$date),function(x){substr(x,6,7)}))
+Loan$Year <- do.call("c",lapply(as.character(Loan$date),function(x){substr(x,1,4)}))
+Loan_ <- Loan %>% 
+    group_by(Year,Month) %>%
+    summarise(n = n())
+Loan_$M_Y <- paste0(Loan_$Month,"/",substr(Loan_$Year,3,4))
+Loan_$M_Y <- factor(Loan_$M_Y,levels = unique(Loan_$M_Y))
+Loan_$n = as.numeric(as.character(Loan_$n))
+
+# Frequency of CC's being issued
+Loan__ <- Loan %>% 
+    group_by(loan_stat) %>%
+    summarize(count = n())
+
+# Create the plot
+plot <- plot_ly()
+plot <- plot %>% add_trace(x = ~Loan_$M_Y,y = ~Loan_$n,type = 'scatter',mode = "lines") %>% layout(xaxis = list(domain = c(0,1),autotick = FALSE, dtick = 6,title = "Date of Issuance"),yaxis = list(title = "Loans Issued"),showlegend = FALSE)
+plot <- plot %>% add_trace(labels = ~Loan__$loan_stat, values = ~Loan__$count,hole = 0.6,type = 'pie',domain = list(x = c(0.1,0.25),y = c(0.6,0.95))) %>% layout(showlegend = FALSE)
+plot
+```
+We notice from the donut plot within the line plot that there is a clear difference between the number of good loans versus bad loans within the table. Bad loans account for roughly 11.1% of the table and good loans acount for roughly 88.8%. We would hope that our good loans outnumber the bad loans so this is obviously a good thing. However, the banks may want to consider more closely who they grant the loans to in order to further reduce the frequency of bad loans. We can see the number of loans granted has trended upwards over time, however, the number of loans began to decline in 1998.
+
+```{r}
+plot_ly(color = ~Loan$loan_stat,x = ~Loan$amount,type = "box",orientation = "h",showlegend = TRUE) %>% layout(height = 400,xaxis = list(title = "Loan Amount"),yaxis = list(title = "",showticklabels = FALSE))
+```
+
+
+We can see there is a clear differene between the loan amount for the loans with good status versus bad status. The median loan amount for the good loans was roughly 110k. The median loan amount for the bad loans was roughly 188k. However, we can see that the good loans are highly right skewed and we have some individuals who were able to pay off the loans in full or who are in good standing for large loans. We may want to consider removing the individuals who were able to pay off those larger loans that were in good standing because they may be very wealthy individuals compared to the majority of the sample of individuals. We will look more closely at the good loans versus bad loans when we begin joining tables together.
+
+
+
+### Creating Data Subsets for Analysis
+
+If we join the tables together we can begin to examine different questions such as the following:
+
+How do the different features relate to whether an individual will have a loan in bad or good standing?
+
+I would like to look into the first question in particular. This is an inferential statistics question versus a prediction question, where we shall look into how the various features affect whether the individual will be in good (paid off fully or on track) or bad (unable to payoff fully or not on track) standing with their loan. First we shall merge the Loan table with the Account table on the account_id.
+
+```{r}
+# Merge loans with accounts
+Loans <- merge(
+    Loan,
+    Account,
+    "account_id",
+    all.x = TRUE
+)
+names(Loans)[which(names(Loans) == "date.x")] <- "Loan_date"
+names(Loans)[which(names(Loans) == "date.y")] <- "Account_date"
+```
+
+Now we have information for the account which the loan originated from. Next we'll merge the merged dataset with the Disp table on the account_id so we can join more tables together.
+```{r}
+# Merge dataset with disp table
+Loans <- merge(
+    Loans,
+    Disp,
+    "account_id",
+    all.x = TRUE
+)
+```
+The dataset description online says that only owners of the accounts can open a loan. However, we may have accounts with both an "owner" and a "user" (denoted "DISPONENT" in the Disp dataset). "DISPONENT" accounts for 34.178% of the loan records. This means there are two rows for both the owner and user of the loan. Therefore, the owner may not always be the individual who is utilizing the loan. However, the transactions table does not have an identification number for the client who is making the loan payments for the account. We will assume that the owner of the account is always making the loan payments. We will filter the dataset to only the owner of the account.
+```{r}
+# Filter dataset to the clients that are the owners of the accounts
+Loans <- Loans %>% filter(type == "OWNER")
+```
+Now I am going to merge the dataset to the Client table to obtain the date of birth of each client.
+```{r}
+# Merge dataset with client information
+Loans <- merge(
+    Loans,
+    Client,
+    "client_id",
+    all.x = TRUE
+)
+```
+We can also merge the credit card information for each client. It may be interesting to see if the number of credit cards a client owns has an influence on whether or not they are a good candidate for a loan. It is important that we only take into consideration the credit cards that were issued before the loan was issued if we are going to further use the dataset to also predict who may be a promising client for a loan.
+```{r}
+# Obtaining the number of junior, classic, gold, and total credit cards issued before the loan was granted
+Number_CCs <- data.frame(do.call("rbind",lapply(unique(Loans$disp_id),function(x){
+    loan_date <- Loans[Loans$disp_id == x,]$Loan_date
+    if(nrow(Card[Card$disp_id == x,]) == 0) {
+        c(x,0,0,0,0)
+    } else {
+        current_id <- Card[Card$disp_id == x,]
+        if(current_id$issued <= loan_date) {
+            c(x,sum(current_id$type == "junior"),sum(current_id$type == "classic"),sum(current_id$type == "gold"),sum(current_id$type == "gold"|current_id$type == "classic"|current_id$type == "junior"))    
+        } else {
+            c(x,0,0,0,0)
+        }
+    }
+})))
+names(Number_CCs) <- c("disp_id","junior","classic","gold","CC")
+
+# Merging to the dataset
+Loans <- merge(
+    Loans,
+    Number_CCs,
+    "disp_id",
+    all.x = TRUE
+)
+```
+
+Next I shall join the District table to the dataset to obtain the region of each loan.
+
+```{r}
+# Merge dataset with district information
+Loans <- merge(
+    Loans,
+    District,
+    by.x = "district_id.x",
+    by.y = "district_id",
+    all.x = TRUE
+)
+```
+I am going to create a feature for the age of the client at the time at which they took out the loan. This could have an influence on how responsible the client is at making the payments for the loan. In order to do this we will take the difference in time between the loan intiation date and the birth date of the client. The description for the dataset online says that for females, 50 days have been added to the days of the month, so we must subtract 50 days from the age of the females. I will also create a time difference column for the difference between when the account was opened and the loan was granted. I am hypothesizing that an individual who has a longer history with the bank may be more likely to remain in good standing with a loan.
+```{r}
+# Creating the age feature
+Loans$Age <- ifelse(
+    Loans$gender == "M",
+    round(as.numeric(difftime(as.Date(Loans$Loan_date),as.Date(Loans$birth_date),unit = "weeks"))/52.25,2),
+    round(as.numeric(difftime(as.Date(Loans$Loan_date),as.Date(Loans$birth_date)-50,unit = "weeks"))/52.25,2)
+)
+
+# Creating the time difference feature
+Loans$Time_diff_loan <- as.numeric(difftime(as.Date(Loans$Loan_date),as.Date(Loans$Account_date),unit = "days"))
+```
+I think it is also important to obtain information on the transactions the client was making before being granted the loan. We will create features that describe the minimum, mean, and maximum balance within the clients account 90 days prior to obtaining the loan. We will create features that describe the minimum, mean, and maximum transaction amount within the clients account 90 days prior to obtaining the loan. Finally, we will create one feature detailing the sum of transactions that are interest charged on a negative balance in the clients account, and another feature which details the number of credit card withdrawals from the acocount. Banks tend to look at transaction history two months before the loan application and also look into the credit history of the client. I have tried to extract credit history for the 90 days prior to the loan application as this may provide a better picture of the clients transaction history.
+```{r}
+# Creating summary information for transaction history (90 days prior to loan granted date)
+Transactions_data_summary <- data.frame(do.call("rbind",lapply(1:length(unique(Loans$account_id)),function(x){
+    transactions <- Transactions[Transactions$account_id == Loans$account_id[x],]
+    loan <- Loans[Loans$account_id == Loans$account_id[x],]
+    date_ranges <- seq(as.Date(loan$Loan_date)-90,as.Date(loan$Loan_date),by = "days")    
+    within <- transactions[as.Date(transactions$date) %in% date_ranges,]
+    c(
+        min(within[as.Date(within$date) %in% date_ranges,]$balance),
+        mean(within[as.Date(within$date) %in% date_ranges,]$balance),
+        max(within[as.Date(within$date) %in% date_ranges,]$balance),
+        min(within[as.Date(within$date) %in% date_ranges,]$amount),
+        mean(within[as.Date(within$date) %in% date_ranges,]$amount),
+        max(within[as.Date(within$date) %in% date_ranges,]$amount),
+        ifelse(nrow(within[within$k_symbol == "SANKC. UROK" & !is.na(within$k_symbol),]) == 0,0,sum(within[within$k_symbol == "SANKC. UROK" & !is.na(within$k_symbol),]$amount)),
+        nrow(within[within$operation == "VYBER KARTOU" & !is.na(within$operation),])
+    )
+})))
+names(Transactions_data_summary) <- c("min_balance","mean_balance","max_balance","min_amount","mean_amount","max_amount","sum_interest_neg_balance","credit_card_withdrawals")
+
+# Adding the information to the dataset
+Loans_ <- cbind(Loans,Transactions_data_summary)
+```
+
+## Models 
+
+### Linear Regression
+
+
+### Machine Learning
+```{r}
+# Create training/testing split
+set.seed(3456)
+Train.index <- createDataPartition(Loans_LR$loan_stat,p = .7,list = FALSE)
+Train <- Loans_LR[Train.index,]
+Test  <- Loans_LR[-Train.index,]
+```
+
+##Appendix: Spatial Econometric Model
+
+##Why isn't demography significant?
+
+An argument could be made that there ought to be an intuitive relationship between demography and loan risk. It makes sense that areas with higher average salary would see less delinquency. It makes sense that areas with higher crime or poverty might see higher delinquency. These results did not appear in the logistic regression, however. How can this be? One challenge here is that the demographic data is observed by district, meaning the value for each demographic variable can only ever be one out of 76 unique values, and cannot vary accordingly with each observed loan customer. To drill down on this demographic data, let's build a smaller regression that examines risk by district rather than by each loan, itself. 
+
+
+##Accessory Model: Spatial Error Regression
+
+We will begin by removing Prague from our regression. It is an extreme outlier across almost all demographic metrics. Let's test for spatial autocorrelation by first running OLS and a log linear model based on variables with pseudo-logarithmic distributions. 
+
+```{r}
+districts_geo <- districts_geo %>% filter(region != "Prague")
+dem_ll <- lm(risky_loans ~ pop + log(perc_urban) + log(avg_sal) + unemp96 + entrepreneurs + crime96 + clients, data=districts_geo)
+summary(dem_ll)
+AIC(dem_ll)
+
+dem_ols <- lm(risky_loans ~ pop + perc_urban + avg_sal + unemp96 + entrepreneurs + crime96 + clients, data=districts_geo)
+summary(dem_ols)
+AIC(dem_ols)
+```
+
+OLS performs adequately. The log-linear transformations don't seem to make much of a difference. Now let's build out our spatial weight matrix. 
+
+
+```{r}
+library(maptools)
+library(spdep)
+library(leaflet)
+library(RColorBrewer)
+```
+
+```{r}
+districts_sp <- as(districts_geo, Class="Spatial")
+list.queen<-poly2nb(districts_sp, queen=TRUE)
+W<-nb2listw(list.queen, style="W", zero.policy=TRUE)
+plot(W,coordinates(districts_sp))
+coords<-coordinates(districts_sp)
+W_dist<-dnearneigh(coords,0,1,longlat = FALSE)
+```
+
+Let's run global Moran's I here to test for autocorrelation in the residuals.
+
+```{r}
+moran.lm<-lm.morantest(dem_ols, W, alternative="greater")
+print(moran.lm)
+```
+
+Our p-value is close to .05 and our Moran's I slightly higher than zero. This distribution is not perfectly random. There may be a little spatial autocorrelation happening here. What kind of spatial autocorrelation are we dealing with? Let's run a Lagrange Multiplier Test to identify which spatial econometric model we could use to substitute OLS.
+
+```{r}
+LM<-lm.LMtests(dem_ols, W, test="all")
+print(LM)
+```
+
+Looks like a spatial error model is most appropriate here. But if we run that model with the code below, we see it doesn't help the AIC and doesn't improve the model. With all these tests complete, we can conclude that even after controlling for potential autocorrelation, our demographic variables just don't have much predictive power in this case. 
+
+```{r}
+library(spatialreg)
+dem_sem <- errorsarlm(risky_loans ~ pop + perc_urban + avg_sal + unemp96 + entrepreneurs + crime96 + clients, data=districts_geo, W)
+summary(dem_sem)
+
+dem_ll_sem <- errorsarlm(risky_loans ~ pop + log(perc_urban) + log(avg_sal) + unemp96 + entrepreneurs + crime96 + clients, data=districts_geo, W)
+summary(dem_ll_sem)
+```
+## Conclusions

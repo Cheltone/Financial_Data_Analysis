@@ -1,0 +1,237 @@
+---
+title: "DSE 511 Individual Project"
+author: "Connor Reed"
+date: "11/4/2020"
+output: html_document
+---
+
+This notebook outlines basic ESDA procedures used to explore the PKDD 1999 Discovery Challenge data set. This data set contains information about a bank operating in the Czech Republic. Before we begin loading the data, we should install some packages for analysis. Note: these are meaty packages and it will take a few minutes for the installation to complete.
+
+
+##Database Connection
+
+Here we will connect to the financial database and explore some of the tables and fields in its schema. This first table will show the names of each table. We can see we have information related to accounts, cards, clients, disposition (whether a client is the owner/executor of an account or just a user), district (geographic/demographic data), loans, orders, and transactions.
+
+The subsequent tables show field names within each table. You will notice that all tables are connected into a complete schema by some shared ID field. In the sections below we will work on cleansing and transforming some of the tables into data that we can use for ESDA.
+
+```{r}
+library(DBI)
+library(RSQLite)
+con <- dbConnect(SQLite(), "C:/Users/conre/Desktop/DSE 511/Project/Data/financial.db")
+as.data.frame(dbListTables(con))
+as.data.frame(dbListFields(con,"account"))
+as.data.frame(dbListFields(con,"card"))
+as.data.frame(dbListFields(con,"client"))
+as.data.frame(dbListFields(con,"disp"))
+as.data.frame(dbListFields(con,"district"))
+as.data.frame(dbListFields(con,"loan"))
+as.data.frame(dbListFields(con,"order"))
+as.data.frame(dbListFields(con,"trans"))
+```
+
+We can use a simple dbGetQuery function to check out a snapshot of the rows inside each table.
+
+The account table contains ID fields for account and district, the account creation date, and a string field indicating how often statements are issued for the observed account.
+
+The card table contains ID fields for card and dispersion, a card issue date, and a card type field.
+
+The client table contains a client ID, gender, birth date, and district ID.
+
+The disp table contains ID fields for dispersion, client, account, and a dispersion type field.
+
+The district table contains a district ID field, and various geographic and demographic variables for all districts in the Czech Republic. You will notice that these fields have not been named appropriately. We will fix this later in the exercise.
+
+The loan table contains ID fields for loans and accounts, with a date the loan was issued, an amount, the duration, and the current status of the loan.
+
+```{r}
+dbGetQuery(con, "select * from account limit 3")
+dbGetQuery(con, "select * from card limit 3")
+dbGetQuery(con, "select * from client limit 3")
+dbGetQuery(con, "select * from disp limit 3")
+dbGetQuery(con, "select * from district limit 3")
+dbGetQuery(con, "select * from loan limit 3")
+dbGetQuery(con, "select * from 'order' limit 3")
+dbGetQuery(con, "select * from trans limit 3")
+```
+
+
+##Data Preparation
+
+Of course, there are many different variables to play with in this database. An analyst could slice and dice this data in different ways to solve different problems to support actuaries, marketers, strategists, and other internal roles at the bank. As an economic geographer, I'm most interested in macro- and micro-geographic patterns of economic activity. How can we use this data to perform some exploratory spatial data analysis?
+
+Let's start by getting the data in a format we can work with. We will first convert each of our database tables into disparate data frames.
+
+```{r}
+account <- dbReadTable(con,"account")
+card <- dbReadTable(con,"card")
+client <- dbReadTable(con,"client")
+dispersion <- dbReadTable(con,"disp")
+district <- dbReadTable(con,"district")
+loan <- dbReadTable(con,"loan")
+order <- dbReadTable(con,"order")
+transaction <- dbReadTable(con,"trans")
+```
+
+While it's true that the majority of our tables contain only aspatial data, we have a name field in the district table we can use to start looking at our data geographically. Seasoned geographers and historians will recall that the Czech Republic has been divided into 76 districts (or "Okresy") since before the country even existed. These geographic delineations remained intact even after Czechoslovakia disbanded. We can use this district name field to join in some spatial data. However, before we get to mapping, let's clean this table and make sure the fields are appropriately named. More appropriate field names can be drawn from the metadata at this link: https://sorry.vse.cz/~berka/challenge/pkdd1999/berka.htm
+
+```{r}
+library(tidyverse)
+
+district <- district %>% rename(dist_name=A2,region=A3,pop=A4,twn_xsm=A5,twn_sm=A6,twn_md=A7,twn_lg=A8,cities=A9,perc_urban=A10,avg_sal=A11,unemp95=A12,unemp96=A13,entrepreneurs=A14,crime95=A15,crime96=A16)
+```
+
+
+##EDA: Market Penetration
+
+Excellent, now our fields are much easier to interpret. Now, we could simply join this demographic data to a spatial file to start making some maps, but there is still an opportunity here to incorporate some of the data on bank operations. Let's start with a simple penetration rate. This is a concept used by retail researchers to gauge how well their existing business has penetrated the population of a given market. For a store, this is simply # of customers divided by population. In the case of this bank, it will be # of clients over population. There is an implicit assumption here that we are dealing with personal banking customers rather than commercial businesses - and given that the client table lists genders and birthdates this seems reasonable to assume. Let's transform our client table to show us # of clients by district, then we will join it to our district table.
+
+```{r}
+dist_client <- client %>% group_by(district_id = as.character(district_id)) %>% summarise(clients = n_distinct(client_id))
+
+district <- district %>% mutate(district_id = as.character(district_id))
+
+district <- inner_join(district,dist_client)
+```
+
+Which districts have the highest raw client counts?
+
+```{r}
+district %>% arrange(desc(clients)) %>% slice(1:10) %>% ggplot(.,aes(x=reorder(dist_name,-clients),y=clients))+geom_bar(stat="identity") + guides(x =  guide_axis(angle = 90)) + labs(x="Top 10 Districts by # of Clients",y="")
+```
+
+No surprise there. Praha (Prague in English) is the capital of the Czech Republic and the most populous city by a landslide. It makes sense that it would have the most clients. What if we controlled for population and calculated a penetration rate?
+
+```{r}
+district <- district %>% mutate(penetration = clients/pop)
+
+district %>% arrange(desc(penetration)) %>% slice(1:10) %>% ggplot(.,aes(x=reorder(dist_name,-penetration),y=penetration))+geom_bar(stat="identity") + scale_y_continuous(labels = scales::percent)+ guides(x =  guide_axis(angle = 90)) + labs(x="Top 10 Districts by Market Penetration",y="")
+```
+
+Interesting. Typical penetration rates for typical monopolistically competitive sectors of retail are usually between 1% and 15%. Penetration rates for this bank are strikingly low in all districts of the Czech Republic, indicating that the bank we are studying may be a relatively small chain of branches, or a single player in a market with extreme competitive saturation. We can see some relatively higher penetration rates in districts that are outside the capital. This could be correlated with the locations of branches or offices.
+
+
+##EDA: Risk Exposure
+
+Let's pick another piece of this database to study with a geographic lens. We have data on loans the bank has given, and classifications for these loans: A = loan period has ended, paid in full; B = loan period has ended, outstanding debt; C = currently making timely payments; D = currently behind on payments. Clearly, classes B and D pose some risk to the bank's top line. It can be costly to track down clients and impose legal actions to make them pay, and bank's want to minimize the risk of taking on clients who will default on their loans. Let's see if we can create some features to capture risk exposure in each district. We will begin by joining the account table to the loan table so we can append a district id to each loan.
+
+```{r}
+account <- account %>% mutate(account_id = as.character(account_id)) %>% select(account_id,district_id)
+
+loan <- loan %>% mutate(account_id = as.character(account_id)) 
+
+loan <- inner_join(loan,account)
+```
+
+Now we will summarize the total number of loans, and the number of loans carrying risk by district id. We can create a simple ratio of these terms to arrive at a risk exposure score.
+
+```{r}
+loans <- loan %>% group_by(district_id = as.character(district_id)) %>% summarise(total_loans = n_distinct(loan_id))
+
+risky_loans <- loan %>% filter(xor(status=="B",status=="C")) %>% group_by(district_id = as.character(district_id)) %>% summarise(risky_loans = n_distinct(loan_id))
+
+loans <- inner_join(loans,risky_loans,by="district_id")
+
+loans <- loans %>% mutate(risk_exp = risky_loans/total_loans)
+```
+
+Now let's join the loan data back on to our district table.
+
+```{r}
+district <- district %>% mutate(district_id = as.character(district_id))
+
+district <- inner_join(district,loans)
+```
+
+Awesome! Now we have a table with demographic information for each district, market penetration, and existing risk exposure from the bank's lending practice. We're almost ready to get into some cartography. But first, let's build out a quick bar plot for risk exposure like we did for market penetration.
+
+```{r}
+library(reshape2)
+
+top_district <- district %>% mutate(safe_loans = total_loans - risky_loans) %>% arrange(desc(risky_loans)) %>% slice(1:20)
+
+mdat = melt(top_district, id.vars=c("dist_name"), measure.vars=c("safe_loans", "risky_loans"))
+
+ggplot(mdat, aes(x=reorder(dist_name,-value), y=value, fill=variable)) + theme_bw() + geom_bar(position="stack", stat="identity") + scale_fill_manual(values=c("grey80", "grey50")) + guides(x =  guide_axis(angle = 90)) + labs(x="Top 10 Districts with Greatest Loan Risk Exposure",y="")
+```
+
+It looks like it's pretty common for this bank to have a substantial proportion of their borrowers either failing to pay back loans or behind on their payments. The bank may want to consider adopting some stricter requirements for borrowing, such as better credit or a higher income.
+
+
+##EDSA: Choropleth Mapping
+
+Time to make some maps! Finding geographic data for districts in the Czech Republic is very simple. A quick Google search will get you there, but I'll paste some links to data sources here, too. We can read in vectorized spatial data using the sf package. Note that you can also load in the RCzechia package via R, but this package is quite massive, with many dense spatial objects that we don't need for this study. Depending on your available memory/processing power, it's more efficient to just load in a single shapefile.
+
+https://github.com/jlacko/RCzechia or https://geoportal.cuzk.cz/
+
+```{r}
+library(sf)
+
+districts_geo <- st_read("C:/Users/conre/Desktop/DSE 511/Project/Data/districts_czech.shp")
+```
+
+Now let's join our existing district table onto the shapefile using the dist_name field. Depending on the vintage of your R software under the hood, you may see a package warning on this code chunk. You can disregard this.
+
+```{r}
+districts_geo <- inner_join(districts_geo,district,by="dist_name")
+```
+
+We can now combine some GIS packages to create some choropleth maps. Let's start with market penetration.
+
+```{r}
+library(ggspatial)
+library(sp)
+library(scales)
+
+choro_pen <- ggplot(districts_geo) +
+  geom_sf(aes(fill=penetration),color = gray(.6),alpha=.7) + labs(fill = "Market Penetration by District") + theme(axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        panel.grid.major = element_line(color = "white"))
+
+choro_pen + scale_fill_gradient(low='yellow',high='brown',labels=percent)
+```
+
+Nice! Looks like this bank penetrates a little stronger in the western half of the country which is actually more rural than other parts of the Czech Republic. If we overlaid a map of branch locations we might discover why this penetration pattern is present.
+
+What about risk exposure? Where are the risky loans concentrated?
+
+```{r}
+choro_risk <- ggplot(districts_geo) +
+  geom_sf(aes(fill=risk_exp),color = gray(.6),alpha=.7) + labs(fill = "Risk Exposure by District") + theme(axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks = element_blank(),
+        panel.background = element_rect(fill = "white"),
+        panel.grid.major = element_line(color = "white"))
+
+choro_risk + scale_fill_gradient(low='white',high='red',labels=percent)
+```
+
+It looks like we have some districts that are in trouble. Every loan we write is either late on payments or has past term and has not been repaid. We should check out how our branches are evaluating loan applicants and make sure we are only doing business with customers who we are confident will pay their dues on time.
+
+
+##Conclusion
+
+This type of ESDA opens up new opportunities for research and new avenues to explore. We could start regressing some of the demographic variables we already have in the district table on risk exposure and market penetration to see what place-specific factors really drive these metrics. We might hypothesize that areas with higher risk exposure generally have lower average salaries and perhaps higher crime. We could speculate that areas with improved market penetration are areas with higher average salary. We could even perform a geostatistical analysis to identify statistically significant patterns of spatial clustering among variables of interest. Another interesting application would be to head back to square one and start examining transaction data by these district geographies.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

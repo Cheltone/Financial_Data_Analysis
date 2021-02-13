@@ -1,0 +1,158 @@
+---
+title: "rbrik1_DSE511_IndividualProject"
+author: "rbrink1"
+date: "October 23, 2020"
+output: html_document
+---
+
+
+# Individual Project 
+
+__This cell (below bold font till the Author Block) of the Jupyter notebook represents the data rubric as given to the student through Canvas. This cell is not original work but copied for the purpose of clarity. Unless specified, all other cells represent original work for the fufillment of the expectations of this project. Thank you.__
+
+## Summary
+
+In this assignment you will perform a complete exploration of a dataset, and communicate what you find to us. The minimum expectation is that you download the dataset, and provide a Jupyter notebook that clearly walking through the data, showing interesting features that suggest further experimentation and analysis. This means you will need to summarize and visualize the data. We suggest using Python for this, but if you are more comfortable with other languages such as R or Julia, you may use those as well. You will be graded based on reproducibility, clarity in presenting your findings, and depth of your analysis.
+
+## Data
+
+The data you use will be financial data from a PKDD1999 Challenge. The data
+is described here (Ignore the references to KDD in the Task Description section):
+https://sorry.vse.cz/~berka/challenge/pkdd1999/berka.htm
+These tables are prepared for you as a compressed sqlite database dump. Import
+it as follows:
+
+* Download financial_sqlite.sql.zip
+* Unzip this file (on Linux: unzip financial_sqlite.sql.zip).
+* In bash run the following: cat financial_sqlite.sql | sqlite3 financial.db
+
+This will create a sqlite database called financial.db with tables corresponding
+to the description at the link above.
+
+
+## Expectations for this project
+
+* Download and import the data properly.
+* Use Jupyter to explore the dataset. You are encouraged to use Python but if you are more comfortable in R, Julia, or another language you may. However, like your other assignments, your submission should be in the form of an HTML export of a Jupyter  notebook.
+* Explain the high-level overview of what data is available. Show examples of rows in the tables and describe how the tables relate to one another.
+* Summarize the data, through basic statistics/counting as well as visualization of particular quantities. This may involve combining information from multiple tables.
+* Imagine you could collect further data from this bank. Suggest hypotheses for further experimentation, based on patterns you find in the present dataset.
+* Do so clearly and reproducibly: Documentation is present/clear
+
+
+## Author Block:
+Name: Rebecca Brink
+
+UTK ID: rbrink1
+
+Department: UTK Bredesen Center
+
+email: rbrink1\@vols.utk.edu
+
+
+## Importing 
+
+Okay, we have made it past the rubric and the authorship bit. Now it is time to start. We have already created our database object as described in the rubric. We start by importing our R libraries and opening the connection to the db.
+
+```{r}
+#import libraries
+library(RSQLite)
+library(dplyr)
+library(ggplot2)
+
+#open the db connection 
+#path explicet so do no thave to set path in Rmarkdown from Jupyter
+sqlcon <- dbConnect(SQLite(),dbname="C:\\Users\\Becca\\Documents\\DSE511\\financial.db")
+
+```
+
+## Schema
+
+Theoretically, there should be a nifty command in R to display the schema of the database we connected to. I couldn;t figure this out, so we go the manual route. The code below looks at the table name and then prints out the features for that table. We note these names and refer back to this print out to perform queries to access the tables. 
+
+```{r}
+#should be able to print the schema here, but can't figure out the elegant way
+#brute force it:
+dbListTables(sqlcon) #display table names
+for (i in dbListTables(sqlcon)){
+  print(i) #print table
+  print(dbListFields(sqlcon,i)) #helps to spell fields correctly
+}
+```
+
+## Data Peek
+
+Now that we know the names of the tables we can take a peek at some of the "heads" of the data. Below we use a SQLite query to look at the header of four tables of interest. I chose these tables as information extremely relevant to clients and loan success. There are several analyses that could be performed on this data, however, we will spend the rest of the assignment focused on predicting loan pay-off with client information.  
+
+```{r}
+# Let's visualize the head of a few tables of interest
+
+dbGetQuery(sqlcon,"SELECT * FROM account LIMIT 10")
+dbGetQuery(sqlcon,"SELECT * FROM client LIMIT 10")
+dbGetQuery(sqlcon,"SELECT * FROM loan LIMIT 10")
+dbGetQuery(sqlcon,"SELECT * FROM disp LIMIT 10")
+
+```
+
+## Load Data for Use 
+
+Now that we have an idea of what the data looks like, we will load the tables of interest and then close the connection to the database. Since we do not plan on writing to this database and now locally have the information we need, there is no point to keep the connection open. 
+
+```{r}
+#Load tables into datatables 
+#In a larger data set think twice about this
+tb_acc=dbGetQuery(sqlcon,"SELECT * FROM account")
+tb_client=dbGetQuery(sqlcon,"SELECT * FROM client")
+tb_loan=dbGetQuery(sqlcon,"SELECT * FROM loan")
+tb_disp=dbGetQuery(sqlcon,"SELECT * FROM disp")
+
+dbDisconnect(sqlcon) #close the database
+```
+## Join Tables 
+
+Here we perform two different types of joins. The first is a right join between the accounts and loan data tables. We opted for a right join to maintain the nan values to see if there were large gaps in the data. After seeing that this data alligned well, we use inner joins for the disp and client tables. This gives us a relatively complex data set for ever account that has enough desired information to allow us to explore the possibility of prediction  via machine learning. We then explicitly set this table to be a dataframe so that we can use it to visualize results. We also note that we relable and reformat two of the date columns for future use. 
+
+```{r}
+#form a df from tables
+dt=right_join(tb_acc,tb_loan,by="account_id")
+dt$accdate=dt$date.x
+dt$loandate=dt$date.y
+dt = subset(dt, select = -c(date.x,date.y))
+dt=inner_join(dt,tb_disp,by="account_id")
+dt=inner_join(dt,tb_client,by="client_id")
+
+df=data.frame(dt)
+df$accdate=as.Date(df$accdate)
+df$loandate=as.Date(df$loandate)
+```
+
+## Visualizations 
+
+Let us start with a few histograms of some of the variables. We can see that there are a very similar number of different duration loans in this dataset. At first glance, these frequencies form a uniform distribution. We might expect a similar trend with the payments as duration and payments intuatively are related. However, when we look at the payment histogram we see a left-skewed normal distribution. This probably indicates that this variable is payments made and not the payments over the course of the loan. It also shows that more people are at the start of their loan. We should check the data and ensure this assumption is correct, which looking at the metadata online we see is accurate. We look to see if the amount of the loan follows a similar trend. the amount of the loan seems to follow an exponential distribution with most loans falling under $200k. Intuitively this makes sense as we would expect the majority of people to be borrowing money in this range. Finally, we look at the status of the loan by category. We see that C is by far the most frequent category. We need to consult the metadata for the meaning of each value in this feature. We find that A is the number of closed loas with no problems, B is a loan that is closed but was not paid in full, C is a loan that is open with no problems, and D is a loan that is open but the client is in debt or behind on their loan. It makes sense that C is the most common category. 
+
+```{r}
+#visualize based on df
+hist(df$duration)
+hist(df$payments)
+hist(df$amount)
+ggplot(df, aes(x = factor(status))) +geom_bar()
+```
+
+The histograms are very informational for understanding single variables. For understandin the relationships between two or more variables we need to look at larger dimension visuals. With very little domain knowledge, we are interested in the relationship between loan and account date. This is demonstrated in the first scatter plot. This shows that these two dates are very strongly linearly related. We are also curious about how the status of the loan is related to the loan date and amount of the loan. These two graphs are shown below the date compasrison. For status and  the date of the loan, we can see that the A category tends to start earlier than the other three, with B also having a few earlier dates. This makes sense as A is paid off loans. C and D are current loans so it also makes sense that these are started sooner. As far as loan amounts, the A and B categories have means far below that of C and D. This also makes sense as inflation and other factors have greatly impacted the value of the dollar since the start of this data set. Date crossed with value may be a useful feature for prediction of failure, but alone these factors probably have a minimal impact. 
+
+```{r}
+plot(df$loandate,df$accdate, main="Account and Loan Date Comparison")
+
+ggplot(df, aes(as.factor(status),loandate))+geom_point()+
+  ggtitle("Date of Loan vs Status")+theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(df, aes(as.factor(status),amount))+geom_point()+
+  ggtitle("Amount of Loan vs Status")+theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+## Further Analysis
+
+First off, there are a dozen more angles from which we could tackle this data. We could potentially take the view point of the lendee, the lender, a policy maker, or perhaps even a financial investor to look for questions that this data could provide insight. Each of those questions would need different information from each table and would put it together in different ways. Here we looked for information that would help us predict the succesfulness of a loan from a lenders perspective. For this question, we could further our analysis by using machine learning algorithms focused on classification to predict whether current loans will be paid in full (successful) or whether they will be defaulted before being paid (unsuccessful). We could do an analysis such as PCA to determine relavant features. Once relevant features are found, we could employ an algorithm such as support vector machines or perhaps a simple nueral network to make predictions. 
+
+
